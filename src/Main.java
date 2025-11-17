@@ -5,12 +5,14 @@ import java.util.List;
 
 /**
  * Mini compilador con INTERFAZ GRÁFICA (Swing)
- * Lenguaje: MiniLang
+ * Lenguaje: MiniLang mejorado
  *
- * Ejemplo de código:
- *   int x = 1 + 2;
- *   int y = x * 3;
- *   print y;
+ * Soporta:
+ *   - Tipos: int, float, double, char, string
+ *   - Literales: números (enteros y con punto), "texto", 'c'
+ *   - Expresiones con +, -, *, /
+ *   - Concatenación con + (string + lo que sea)
+ *   - print de expresiones:  print men + name + num;
  *
  * Fases:
  *   a) Analizador Léxico
@@ -27,25 +29,27 @@ public class Main {
     // =======================
 
     enum TokenType {
-        // Palabras clave
-        INT,        // "int"
-        PRINT,      // "print"
+        // Palabras clave (tipos y print)
+        INT_KW,       // "int"
+        FLOAT_KW,     // "float"
+        DOUBLE_KW,    // "double"
+        CHAR_KW,      // "char"
+        STRING_KW,    // "string"
+        PRINT_KW,     // "print"
 
         // Identificadores y literales
-        IDENTIFIER, // nombres de variables
-        NUMBER,     // números enteros
+        IDENTIFIER,
+        NUMBER,          // 10  3.14
+        STRING_LITERAL,  // "hola"
+        CHAR_LITERAL,    // 'a'
 
         // Símbolos
-        PLUS,       // +
-        MINUS,      // -
-        STAR,       // *
-        SLASH,      // /
-        EQUAL,      // =
-        SEMICOLON,  // ;
-        LPAREN,     // (
-        RPAREN,     // )
+        PLUS, MINUS, STAR, SLASH,
+        EQUAL,
+        SEMICOLON,
+        LPAREN, RPAREN,
 
-        EOF         // fin de archivo
+        EOF
     }
 
     static class Token {
@@ -78,6 +82,7 @@ public class Main {
             this.source = source;
             this.length = source.length();
         }
+
         List<Token> tokenize() {
             List<Token> tokens = new ArrayList<>();
             while (!isAtEnd()) {
@@ -90,6 +95,10 @@ public class Main {
                     tokens.add(identifierOrKeyword());
                 } else if (Character.isDigit(c)) {
                     tokens.add(number());
+                } else if (c == '"') {
+                    tokens.add(stringLiteral());
+                } else if (c == '\'') {
+                    tokens.add(charLiteral());
                 } else {
                     switch (c) {
                         case '+':
@@ -156,28 +165,75 @@ public class Main {
 
         private Token identifierOrKeyword() {
             int start = current;
-            while (!isAtEnd() && Character.isLetterOrDigit(peek())) {
+            while (!isAtEnd() && (Character.isLetterOrDigit(peek()) || peek() == '_')) {
                 advance();
             }
             String text = source.substring(start, current);
             TokenType type;
-            if (text.equals("int")) {
-                type = TokenType.INT;
-            } else if (text.equals("print")) {
-                type = TokenType.PRINT;
-            } else {
-                type = TokenType.IDENTIFIER;
+            switch (text) {
+                case "int":
+                    type = TokenType.INT_KW;
+                    break;
+                case "float":
+                    type = TokenType.FLOAT_KW;
+                    break;
+                case "double":
+                    type = TokenType.DOUBLE_KW;
+                    break;
+                case "char":
+                    type = TokenType.CHAR_KW;
+                    break;
+                case "string":
+                    type = TokenType.STRING_KW;
+                    break;
+                case "print":
+                    type = TokenType.PRINT_KW;
+                    break;
+                default:
+                    type = TokenType.IDENTIFIER;
             }
             return new Token(type, text, start);
         }
 
         private Token number() {
             int start = current;
-            while (!isAtEnd() && Character.isDigit(peek())) {
+            boolean hasDot = false;
+            while (!isAtEnd() && (Character.isDigit(peek()) || peek() == '.')) {
+                if (peek() == '.') {
+                    if (hasDot) break;
+                    hasDot = true;
+                }
                 advance();
             }
             String text = source.substring(start, current);
             return new Token(TokenType.NUMBER, text, start);
+        }
+
+        private Token stringLiteral() {
+            int startPos = current;
+            advance(); // saltar "
+            int start = current;
+            while (!isAtEnd() && peek() != '"') {
+                advance();
+            }
+            if (isAtEnd()) {
+                throw new RuntimeException("String sin cerrar en posición " + startPos);
+            }
+            String value = source.substring(start, current);
+            advance(); // saltar cierre "
+            return new Token(TokenType.STRING_LITERAL, value, startPos);
+        }
+
+        private Token charLiteral() {
+            int startPos = current;
+            advance(); // saltar '
+            if (isAtEnd()) throw new RuntimeException("Char literal vacío.");
+            char ch = advance();
+            if (isAtEnd() || peek() != '\'') {
+                throw new RuntimeException("Char literal inválido, falta comilla de cierre.");
+            }
+            advance(); // saltar cierre '
+            return new Token(TokenType.CHAR_LITERAL, String.valueOf(ch), startPos);
         }
     }
 
@@ -185,7 +241,6 @@ public class Main {
     //   3. AST (ÁRBOL SINTÁCTICO)
     // =======================
 
-    // Expresiones
     static abstract class Expr { }
 
     static class Binary extends Expr {
@@ -224,24 +279,25 @@ public class Main {
         }
     }
 
-    // Sentencias
     static abstract class Stmt { }
 
     static class VarStmt extends Stmt {
+        final Token typeToken; // int, float, double, char, string (palabra clave)
         final Token name;
         final Expr initializer;
 
-        VarStmt(Token name, Expr initializer) {
+        VarStmt(Token typeToken, Token name, Expr initializer) {
+            this.typeToken = typeToken;
             this.name = name;
             this.initializer = initializer;
         }
     }
 
     static class PrintStmt extends Stmt {
-        final Token name;
+        final Expr expression;
 
-        PrintStmt(Token name) {
-            this.name = name;
+        PrintStmt(Expr expression) {
+            this.expression = expression;
         }
     }
 
@@ -266,28 +322,32 @@ public class Main {
         }
 
         private Stmt statement() {
-            if (match(TokenType.INT)) return varDeclaration();
-            if (match(TokenType.PRINT)) return printStatement();
-            throw error(peek(), "Se esperaba 'int' o 'print'.");
+            if (match(TokenType.INT_KW, TokenType.FLOAT_KW, TokenType.DOUBLE_KW,
+                    TokenType.CHAR_KW, TokenType.STRING_KW)) {
+                Token typeToken = previous();
+                return varDeclaration(typeToken);
+            }
+            if (match(TokenType.PRINT_KW)) return printStatement();
+            throw error(peek(), "Se esperaba declaración de tipo o 'print'.");
         }
 
-        private Stmt varDeclaration() {
+        private Stmt varDeclaration(Token typeToken) {
             Token name = consume(TokenType.IDENTIFIER, "Se esperaba nombre de variable.");
             consume(TokenType.EQUAL, "Se esperaba '='.");
             Expr initializer = expression();
             consume(TokenType.SEMICOLON, "Se esperaba ';' al final de la declaración.");
-            return new VarStmt(name, initializer);
+            return new VarStmt(typeToken, name, initializer);
         }
 
         private Stmt printStatement() {
-            Token name = consume(TokenType.IDENTIFIER, "Se esperaba identificador luego de 'print'.");
-            consume(TokenType.SEMICOLON, "Se esperaba ';' al final de la sentencia print.");
-            return new PrintStmt(name);
+            Expr expr = expression();
+            consume(TokenType.SEMICOLON, "Se esperaba ';' al final de print.");
+            return new PrintStmt(expr);
         }
 
         // expression -> term ( ( "+" | "-" ) term )*
         // term       -> factor ( ( "*" | "/" ) factor )*
-        // factor     -> NUMBER | IDENTIFIER | "(" expression ")"
+        // factor     -> NUMBER | STRING_LITERAL | CHAR_LITERAL | IDENTIFIER | "(" expression ")"
 
         private Expr expression() { return term(); }
 
@@ -312,7 +372,7 @@ public class Main {
         }
 
         private Expr primary() {
-            if (match(TokenType.NUMBER)) {
+            if (match(TokenType.NUMBER, TokenType.STRING_LITERAL, TokenType.CHAR_LITERAL)) {
                 return new Literal(previous());
             }
             if (match(TokenType.IDENTIFIER)) {
@@ -368,7 +428,7 @@ public class Main {
 
     static class Symbol {
         final String name;
-        final String type;
+        final String type; // "int", "float", "double", "char", "string"
 
         Symbol(String name, String type) {
             this.name = name;
@@ -382,7 +442,7 @@ public class Main {
     }
 
     static class SymbolTable {
-        private final Map<String, Symbol> symbols = new HashMap<>();
+        private final Map<String, Symbol> symbols = new LinkedHashMap<>();
 
         void declare(String name, String type) {
             if (symbols.containsKey(name)) {
@@ -419,12 +479,17 @@ public class Main {
 
         private void analyzeStmt(Stmt stmt) {
             if (stmt instanceof VarStmt) {
-                VarStmt var = (VarStmt) stmt;
-                analyzeExpr(var.initializer);
-                symbolTable.declare(var.name.lexeme, "int");
+                VarStmt v = (VarStmt) stmt;
+                String declaredType = keywordToTypeName(v.typeToken);
+                String exprType = analyzeExpr(v.initializer);
+                if (!isAssignable(declaredType, exprType)) {
+                    throw new RuntimeException("No se puede asignar tipo '" + exprType +
+                            "' a variable de tipo '" + declaredType + "' (" + v.name.lexeme + ")");
+                }
+                symbolTable.declare(v.name.lexeme, declaredType);
             } else if (stmt instanceof PrintStmt) {
                 PrintStmt p = (PrintStmt) stmt;
-                symbolTable.lookup(p.name.lexeme);
+                analyzeExpr(p.expression);
             } else {
                 throw new RuntimeException("Tipo de sentencia desconocido.");
             }
@@ -432,24 +497,89 @@ public class Main {
 
         private String analyzeExpr(Expr expr) {
             if (expr instanceof Literal) {
-                return "int";
+                Literal lit = (Literal) expr;
+                switch (lit.value.type) {
+                    case NUMBER:
+                        return lit.value.lexeme.contains(".") ? "double" : "int";
+                    case STRING_LITERAL:
+                        return "string";
+                    case CHAR_LITERAL:
+                        return "char";
+                    default:
+                        throw new RuntimeException("Literal desconocido.");
+                }
             } else if (expr instanceof Variable) {
                 Variable v = (Variable) expr;
-                Symbol s = symbolTable.lookup(v.name.lexeme);
-                return s.type;
+                return symbolTable.lookup(v.name.lexeme).type;
+            } else if (expr instanceof Grouping) {
+                Grouping g = (Grouping) expr;
+                return analyzeExpr(g.expression);
             } else if (expr instanceof Binary) {
                 Binary b = (Binary) expr;
                 String leftType = analyzeExpr(b.left);
                 String rightType = analyzeExpr(b.right);
-                if (!leftType.equals("int") || !rightType.equals("int")) {
-                    throw new RuntimeException("Solo se soportan expresiones int.");
+                String op = b.operator.lexeme;
+
+                if (op.equals("+")) {
+                    if (leftType.equals("string") || rightType.equals("string")) {
+                        return "string"; // concatenación
+                    }
+                    if (isNumeric(leftType) && isNumeric(rightType)) {
+                        return numericResult(leftType, rightType);
+                    }
+                    throw new RuntimeException("Operación '+' inválida entre " + leftType + " y " + rightType);
+                } else { // -, *, /
+                    if (!isNumeric(leftType) || !isNumeric(rightType)) {
+                        throw new RuntimeException("Operación '" + op + "' solo permitida entre tipos numéricos.");
+                    }
+                    return numericResult(leftType, rightType);
                 }
-                return "int";
-            } else if (expr instanceof Grouping) {
-                Grouping g = (Grouping) expr;
-                return analyzeExpr(g.expression);
-            } else {
-                throw new RuntimeException("Expresión desconocida.");
+            }
+            throw new RuntimeException("Expresión desconocida.");
+        }
+
+        private static boolean isNumeric(String t) {
+            return t.equals("int") || t.equals("float") || t.equals("double");
+        }
+
+        private static String numericResult(String a, String b) {
+            int ra = rank(a);
+            int rb = rank(b);
+            int r = Math.max(ra, rb);
+            if (r == 3) return "double";
+            if (r == 2) return "float";
+            return "int"; // r==1
+        }
+
+        private static int rank(String t) {
+            if (t.equals("double")) return 3;
+            if (t.equals("float")) return 2;
+            if (t.equals("int")) return 1;
+            return 0;
+        }
+
+        private static boolean isAssignable(String target, String exprType) {
+            if (target.equals(exprType)) return true;
+            // numéricos compatibles
+            if (isNumeric(target) && isNumeric(exprType)) return true;
+            // no hacemos conversiones automáticas entre otros tipos
+            return false;
+        }
+
+        private static String keywordToTypeName(Token typeToken) {
+            switch (typeToken.type) {
+                case INT_KW:
+                    return "int";
+                case FLOAT_KW:
+                    return "float";
+                case DOUBLE_KW:
+                    return "double";
+                case CHAR_KW:
+                    return "char";
+                case STRING_KW:
+                    return "string";
+                default:
+                    throw new RuntimeException("Token de tipo no válido: " + typeToken.lexeme);
             }
         }
     }
@@ -476,19 +606,29 @@ public class Main {
                 code.add(v.name.lexeme + " = " + result);
             } else if (stmt instanceof PrintStmt) {
                 PrintStmt p = (PrintStmt) stmt;
-                code.add("print " + p.name.lexeme);
+                String result = generateExpr(p.expression, code);
+                code.add("print " + result);
             } else {
-                throw new RuntimeException("Sentencia desconocida en generación de código intermedio.");
+                throw new RuntimeException("Sentencia desconocida en código intermedio.");
             }
         }
 
         private String generateExpr(Expr expr, List<String> code) {
             if (expr instanceof Literal) {
                 Literal lit = (Literal) expr;
-                return lit.value.lexeme;
+                if (lit.value.type == TokenType.STRING_LITERAL) {
+                    return "\"" + lit.value.lexeme + "\"";
+                } else if (lit.value.type == TokenType.CHAR_LITERAL) {
+                    return "'" + lit.value.lexeme + "'";
+                } else {
+                    return lit.value.lexeme;
+                }
             } else if (expr instanceof Variable) {
                 Variable v = (Variable) expr;
                 return v.name.lexeme;
+            } else if (expr instanceof Grouping) {
+                Grouping g = (Grouping) expr;
+                return "(" + generateExpr(g.expression, code) + ")";
             } else if (expr instanceof Binary) {
                 Binary b = (Binary) expr;
                 String left = generateExpr(b.left, code);
@@ -496,9 +636,6 @@ public class Main {
                 String temp = newTemp();
                 code.add(temp + " = " + left + " " + b.operator.lexeme + " " + right);
                 return temp;
-            } else if (expr instanceof Grouping) {
-                Grouping g = (Grouping) expr;
-                return generateExpr(g.expression, code);
             } else {
                 throw new RuntimeException("Expresión desconocida en código intermedio.");
             }
@@ -510,45 +647,118 @@ public class Main {
     }
 
     // =======================
-    //   7. TRADUCTOR A PYTHON
+    //   7. TRADUCTOR A PYTHON (desde el AST)
     // =======================
 
     static class CodeTranslator {
-        String toPython(List<String> intermediateCode) {
+
+        static class PyResult {
+            final String code;
+            final String type;
+
+            PyResult(String code, String type) {
+                this.code = code;
+                this.type = type;
+            }
+        }
+
+        private final SymbolTable symbolTable;
+        private final SemanticAnalyzer semanticAnalyzer;
+
+        CodeTranslator(SymbolTable symbolTable, SemanticAnalyzer semanticAnalyzer) {
+            this.symbolTable = symbolTable;
+            this.semanticAnalyzer = semanticAnalyzer;
+        }
+
+        String toPython(List<Stmt> program) {
             StringBuilder sb = new StringBuilder();
             sb.append("# Código Python generado por MiniLang\n");
-            for (String line : intermediateCode) {
-                line = line.trim();
-                if (line.startsWith("print ")) {
-                    String var = line.substring("print ".length()).trim();
-                    sb.append("print(").append(var).append(")\n");
-                } else {
-                    sb.append(line).append("\n");
+            for (Stmt stmt : program) {
+                if (stmt instanceof VarStmt) {
+                    VarStmt v = (VarStmt) stmt;
+                    PyResult r = translateExpr(v.initializer);
+                    sb.append(v.name.lexeme).append(" = ").append(r.code).append("\n");
+                } else if (stmt instanceof PrintStmt) {
+                    PrintStmt p = (PrintStmt) stmt;
+                    PyResult r = translateExpr(p.expression);
+                    sb.append("print(").append(r.code).append(")\n");
                 }
             }
             return sb.toString();
         }
+
+        private PyResult translateExpr(Expr expr) {
+            if (expr instanceof Literal) {
+                Literal lit = (Literal) expr;
+                switch (lit.value.type) {
+                    case NUMBER:
+                        String numType = lit.value.lexeme.contains(".") ? "double" : "int";
+                        return new PyResult(lit.value.lexeme, numType);
+                    case STRING_LITERAL:
+                        return new PyResult("\"" + lit.value.lexeme + "\"", "string");
+                    case CHAR_LITERAL:
+                        // en Python un char es simplemente una string de 1 carácter
+                        return new PyResult("'" + lit.value.lexeme + "'", "char");
+                    default:
+                        throw new RuntimeException("Literal desconocido en traductor.");
+                }
+            } else if (expr instanceof Variable) {
+                Variable v = (Variable) expr;
+                String type = symbolTable.lookup(v.name.lexeme).type;
+                return new PyResult(v.name.lexeme, type);
+            } else if (expr instanceof Grouping) {
+                Grouping g = (Grouping) expr;
+                PyResult inner = translateExpr(g.expression);
+                return new PyResult("(" + inner.code + ")", inner.type);
+            } else if (expr instanceof Binary) {
+                Binary b = (Binary) expr;
+                PyResult left = translateExpr(b.left);
+                PyResult right = translateExpr(b.right);
+                String op = b.operator.lexeme;
+
+                if (op.equals("+")) {
+                    if (left.type.equals("string") || right.type.equals("string")) {
+                        // concatenación segura en Python
+                        String code = "str(" + left.code + ") + str(" + right.code + ")";
+                        return new PyResult(code, "string");
+                    } else {
+                        String resultType = SemanticAnalyzer.numericResult(left.type, right.type);
+                        String code = left.code + " + " + right.code;
+                        return new PyResult(code, resultType);
+                    }
+                } else { // -, *, /
+                    String resultType = SemanticAnalyzer.numericResult(left.type, right.type);
+                    String code = left.code + " " + op + " " + right.code;
+                    return new PyResult(code, resultType);
+                }
+            }
+            throw new RuntimeException("Expresión desconocida en traductor.");
+        }
     }
 
     // =======================
-    //   8. INTERFAZ GRÁFICA (SWING)
+    //   8. INTERFAZ GRÁFICA
     // =======================
 
     private static void createAndShowGUI() {
-        JFrame frame = new JFrame("Mini Compilador - Lenguaje MiniLang");
+        JFrame frame = new JFrame("Mini Compilador - MiniLang extendido");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        frame.setSize(1000, 700);
+        frame.setSize(1100, 750);
         frame.setLocationRelativeTo(null);
 
-        // -------- PANEL SUPERIOR: CÓDIGO DE ENTRADA --------
+        // Área de entrada de código
         JTextArea inputArea = new JTextArea();
         inputArea.setFont(new Font("Consolas", Font.PLAIN, 14));
         inputArea.setText(
-                "int x = 1 + 2;\n" +
-                        "int y = x * 3;\n" +
-                        "print y;"
+                "string name = \"World \";\n" +
+                        "string men = \"Hello \";\n" +
+                        "int num = 25;\n" +
+                        "print men + name + num;\n" +
+                        "\n" +
+                        "char c = 'A';\n" +
+                        "double d = 3.5;\n" +
+                        "float f = 2.0;\n"
         );
-
         JScrollPane inputScroll = new JScrollPane(inputArea);
         inputScroll.setBorder(BorderFactory.createTitledBorder("Código fuente (MiniLang)"));
 
@@ -558,25 +768,20 @@ public class Main {
         topPanel.add(inputScroll, BorderLayout.CENTER);
         topPanel.add(compileButton, BorderLayout.SOUTH);
 
-        // -------- PANEL INFERIOR: RESULTADOS --------
-        JTextArea tokensArea = new JTextArea();
-        tokensArea.setEditable(false);
+        // Áreas de salida
+        JTextArea tokensArea = new JTextArea(); tokensArea.setEditable(false);
         tokensArea.setFont(new Font("Consolas", Font.PLAIN, 12));
 
-        JTextArea symbolsArea = new JTextArea();
-        symbolsArea.setEditable(false);
+        JTextArea symbolsArea = new JTextArea(); symbolsArea.setEditable(false);
         symbolsArea.setFont(new Font("Consolas", Font.PLAIN, 12));
 
-        JTextArea intermediateArea = new JTextArea();
-        intermediateArea.setEditable(false);
+        JTextArea intermediateArea = new JTextArea(); intermediateArea.setEditable(false);
         intermediateArea.setFont(new Font("Consolas", Font.PLAIN, 12));
 
-        JTextArea pythonArea = new JTextArea();
-        pythonArea.setEditable(false);
+        JTextArea pythonArea = new JTextArea(); pythonArea.setEditable(false);
         pythonArea.setFont(new Font("Consolas", Font.PLAIN, 12));
 
-        JTextArea messagesArea = new JTextArea();
-        messagesArea.setEditable(false);
+        JTextArea messagesArea = new JTextArea(); messagesArea.setEditable(false);
         messagesArea.setFont(new Font("Consolas", Font.PLAIN, 12));
 
         JTabbedPane tabs = new JTabbedPane();
@@ -587,11 +792,11 @@ public class Main {
         tabs.addTab("Mensajes", new JScrollPane(messagesArea));
 
         JSplitPane splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT, topPanel, tabs);
-        splitPane.setDividerLocation(300);
+        splitPane.setDividerLocation(320);
 
         frame.getContentPane().add(splitPane);
 
-        // -------- ACCIÓN DEL BOTÓN COMPILAR --------
+        // Acción del botón Compilar
         compileButton.addActionListener(e -> {
             String source = inputArea.getText();
             tokensArea.setText("");
@@ -601,44 +806,38 @@ public class Main {
             messagesArea.setText("");
 
             try {
-                // 1) LÉXICO
+                // 1) Léxico
                 Lexer lexer = new Lexer(source);
-                java.util.List<Token> tokens = lexer.tokenize();
+                List<Token> tokens = lexer.tokenize();
                 StringBuilder tokSb = new StringBuilder();
-                for (Token t : tokens) {
-                    tokSb.append(t).append("\n");
-                }
+                for (Token t : tokens) tokSb.append(t).append("\n");
                 tokensArea.setText(tokSb.toString());
 
-                // 2) SINTÁCTICO
+                // 2) Sintáctico
                 Parser parser = new Parser(tokens);
-                java.util.List<Stmt> program = parser.parse();
-                messagesArea.append("Parser: OK. Se construyó el AST.\n");
+                List<Stmt> program = parser.parse();
+                messagesArea.append("Parser: OK. AST construido.\n");
 
-                // 3) SEMÁNTICO + TABLA SÍMBOLOS
+                // 3) Semántico + tabla de símbolos
                 SymbolTable symbolTable = new SymbolTable();
                 SemanticAnalyzer sem = new SemanticAnalyzer(symbolTable);
                 sem.analyze(program);
-                messagesArea.append("Semántica: OK. No se encontraron errores.\n");
+                messagesArea.append("Semántica: OK. No hay errores.\n");
 
                 StringBuilder symSb = new StringBuilder();
-                for (Symbol s : symbolTable.getAll()) {
-                    symSb.append(s).append("\n");
-                }
+                for (Symbol s : symbolTable.getAll()) symSb.append(s).append("\n");
                 symbolsArea.setText(symSb.toString());
 
-                // 4) CÓDIGO INTERMEDIO
+                // 4) Código intermedio
                 IntermediateCodeGenerator icg = new IntermediateCodeGenerator();
-                java.util.List<String> intermediateCode = icg.generate(program);
+                List<String> intermediateCode = icg.generate(program);
                 StringBuilder intSb = new StringBuilder();
-                for (String line : intermediateCode) {
-                    intSb.append(line).append("\n");
-                }
+                for (String line : intermediateCode) intSb.append(line).append("\n");
                 intermediateArea.setText(intSb.toString());
 
-                // 5) TRADUCCIÓN A PYTHON
-                CodeTranslator translator = new CodeTranslator();
-                String python = translator.toPython(intermediateCode);
+                // 5) Traducción a Python
+                CodeTranslator translator = new CodeTranslator(symbolTable, sem);
+                String python = translator.toPython(program);
                 pythonArea.setText(python);
 
                 messagesArea.append("Compilación completa.\n");
@@ -652,7 +851,7 @@ public class Main {
     }
 
     // =======================
-    //   9. MÉTODO MAIN
+    //   9. MAIN
     // =======================
 
     public static void main(String[] args) {
